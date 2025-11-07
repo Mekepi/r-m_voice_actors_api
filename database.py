@@ -1,36 +1,40 @@
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, declarative_base
+from sqlalchemy import create_engine, Engine
+from sqlalchemy.orm import sessionmaker, declarative_base, Session
 
-from sqlalchemy import Column, Integer, String, ForeignKey, Table, Text
+from sqlalchemy import Column, Integer, String, ForeignKey, Boolean
 from sqlalchemy.orm import relationship
 
 from urllib3 import request
+from time import sleep
 import json
 
-themoviedb_key:str = '2ac26f2399f9a37167df8c2f58bf7a2d'
+my_key:str = '2ac26f2399f9a37167df8c2f58bf7a2d'
 
-engine = create_engine(
-    "sqlite:///voice_actors.db", connect_args={"check_same_thread": False}
+engine:Engine = create_engine(
+    "sqlite:///rickandmorty.db", connect_args={"check_same_thread": False}
 )
 
-Session = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+session = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 Base = declarative_base()
-
 
 class Voice_Actor(Base):
     __tablename__ = 'voice_actors'
 
-    id = Column('id', Integer, primary_key=True, autoincrement=True, index=True)
+    id = Column('id', Integer, primary_key=True, index=True)
     name = Column(String, index=True)
-    url = Column(String) 
-    characters = relationship("Character", back_populates="voice_actors")
+    original_name = Column(String)
+    gender = Column(Integer)
+    adult = Column(Boolean)
 
-    def __init__(self, name, url, characters):
+    episode_character = relationship("EpisodeCharacterCast", back_populates="voice_actor")
+
+    def __init__(self, id, name, original_name, gender, adult):
+        self.id = id
         self.name = name
-        self.url = url
-        self.characters = characters
-
+        self.original_name = original_name
+        self.gender = gender
+        self.adult = adult
 
 class Character(Base):
     __tablename__='characters'
@@ -44,176 +48,141 @@ class Character(Base):
     origin = Column(String)
     location = Column(String)
     image = Column(String)
-    
-    
-    actor_id = Column(Integer, ForeignKey("voice_actors.id"))
-    
-    
-    actor = relationship("Voice_Actor", back_populates="characters")
-    
-    
-    episodes = relationship(
-        "Episode",
-        secondary='character_episode_association',
-        back_populates="characters"
-    )
+    url = Column(String)
 
+    episode_role = relationship("EpisodeCharacterCast", back_populates="character")
+
+    def __init__(self, id, name, status, species, s_type, gender, origin, location, image, url):
+        self.id = id
+        self.name = name
+        self.status = status
+        self.species = species
+        self.s_type = s_type
+        self.gender = gender
+        self.origin = origin
+        self.location = location
+        self.image = image
+        self.url = url
+
+    def __str__(self):
+        return '%s - %i'%(self.name, self.id)
 
 class Episode(Base):
     __tablename__ = "episodes"
-
     
     id = Column(Integer, primary_key=True, index=True)
+    episode_code = Column(String, unique=True)
     name = Column(String)
     air_date = Column(String)
-    episode_code = Column(String, unique=True) # Ex: S01E01
+    url = Column(String, unique=True)
     
+    character_role = relationship("EpisodeCharacterCast", back_populates="episode")
+
+    def __init__(self, id, episode_code, name, air_date, url):
+        self.id = id
+        self.episode_code = episode_code
+        self.name = name
+        self.air_date = air_date
+        self.url = url
     
-    characters = relationship(
-        "Character",
-        secondary='character_episode_association',
-        back_populates="episodes"
-    )
+class EpisodeCharacterCast(Base):
+    __tablename__ = 'EpisodeCharacterCasts'
+    
+    episode_id = Column(Integer, ForeignKey('episodes.id'), primary_key=True)
+    character_id = Column(Integer, ForeignKey('characters.id'), primary_key=True)
+    voice_actor_id = Column(Integer, ForeignKey('voice_actors.id'))
 
-character_episode_association = Table(
-    'character_episode_association', Base.metadata,
-    Column('character_id', Integer, ForeignKey('characters.id'), primary_key=True),
-    Column('episode_id', Integer, ForeignKey('episodes.id'), primary_key=True)
-)
+    episode = relationship("Episode", back_populates="character_role")
+    character = relationship("Character", back_populates="episode_role")
+    voice_actor = relationship("Voice_Actor", back_populates="episode_character")
 
+    def __init__(self, ep_id, char_id, ep, char):
+        self.episode_id = ep_id
+        self.character_id = char_id
+
+        self.episode = ep
+        self.character = char
+    
 Base.metadata.create_all(bind=engine)
 
-def populate_database() -> None:
-    db = Session()
+def collect(db:Session=session(), my_key:str=my_key) -> None:
+    voice_actors:dict[int, Voice_Actor] = {}
+    characters:dict[int, Character] = {}
+    episodes:dict[int, Episode] = {}
+    ep_char_cast:dict[str, EpisodeCharacterCast] = {}
     
-    try:
-        # Get lastest data
+    char_count:int = int(json.loads(request('get', 'https://rickandmortyapi.com/api/character').data)['info']['count'])
+    chars_list:list[dict[str,str]] = json.loads(request('get', 'https://rickandmortyapi.com/api/character/%s'%(str(list(range(1, char_count+1))))).data)
+    for char_dict in chars_list:
+        characters[int(char_dict['id'])] = Character(
+            int(char_dict['id']),
+            char_dict['name'],
+            char_dict['status'],
+            char_dict['species'],
+            char_dict['type'],
+            char_dict['gender'],
+            char_dict['origin']['name']+'_'+char_dict['origin']['url'],
+            char_dict['location']['name']+'_'+char_dict['location']['url'],
+            char_dict['image'],
+            char_dict['url']
+        )
+    
+    ep_count:int = int(json.loads(request('get', 'https://rickandmortyapi.com/api/episode').data)['info']['count'])
+    for i in range(1, ep_count+1):
+        episode_rem:dict[str, str] = json.loads(request('get', 'https://rickandmortyapi.com/api/episode/%i'%(i)).data)
+        ep_id:int = int(episode_rem['id'])
+        ep_episode:str = episode_rem['episode']
+        ep_name:str = episode_rem['name']
+        ep_url:str = episode_rem['url']
 
-        my_key:str = '2ac26f2399f9a37167df8c2f58bf7a2d'
-        tmdb_url = f'https://api.themoviedb.org/3/tv/60625/aggregate_credits?api_key={my_key}'
-        voice_actors: list[dict] = json.loads(request('get', tmdb_url).data)['cast']
+        print(ep_episode)
         
-        char_count_url = 'https://rickandmortyapi.com/api/character'
-        characters_count: int = json.loads(request('get', char_count_url).data)['info']['count']
-        all_ids = ','.join([str(i) for i in range(1, characters_count + 1)])
-        chars_url = f'https://rickandmortyapi.com/api/character/{all_ids}'
-        characters_list: list[dict] = json.loads(request('get', chars_url).data)
+        episode_mvdb:dict[str, str] = json.loads(request('get', 'https://api.themoviedb.org/3/tv/60625/season/%i/episode/%i?api_key=%s&append_to_response=credits'%(int(ep_episode.split('E')[0][1:]), int(ep_episode.split('E')[1]), my_key)).data)
+        ep_air_date:str = episode_mvdb['air_date']
 
-        ep_count_url = 'https://rickandmortyapi.com/api/episode'
-        episodes_count: int = json.loads(request('get', ep_count_url).data)['info']['count']
-        all_ep_ids = ','.join([str(i) for i in range(1, episodes_count + 1)])
-        episodes_url = f'https://rickandmortyapi.com/api/episode/{all_ep_ids}'
-        episodes_list: list[dict] = json.loads(request('get', episodes_url).data)
-        
-        
-        # Filter Voice Actors with actual characters and dict by char
+        epi:Episode = Episode(
+            ep_id,
+            ep_episode,
+            ep_name,
+            ep_air_date,
+            ep_url
+        )
 
-        char_to_va:dict[str, tuple[str, str]] = {}
-        for voice_actor in voice_actors:
-            
-            chars:list[str] = []
-            for r in voice_actor['roles']:
-                for name in r['character'].split(' / '):
-                    if name.endswith('(voice)'):
-                        name = name.split('(')[0][:-1]
-                    if name == '' or name =='Additional Voices':
+        ep_chars:list[Character] = [characters[int(c.rsplit('/', 1)[1])] for c in episode_rem['characters']]
+        for ep_char in ep_chars:
+            ep_char_cast['%i_%i'%(epi.id,ep_char.id)] = EpisodeCharacterCast(
+                epi.id,
+                ep_char.id,
+                epi,
+                ep_char
+            )
+
+        cast:list[dict[str, str]] = episode_mvdb['credits']['cast']+episode_mvdb['guest_stars']
+        for vac in cast:
+            if int(vac['id']) not in voice_actors:
+                voice_actors[int(vac['id'])] = Voice_Actor(
+                    int(vac['id']),
+                    vac['name'],
+                    vac['original_name'],
+                    int(vac['gender']),
+                    bool(vac['adult'])
+                )
+            va = voice_actors[int(vac['id'])]
+
+            for char_name in vac['character'][:-8].split(' / '):
+                for char in ep_chars:
+                    if char_name != char.name:
                         continue
-                    chars.append(name)
 
-            if not chars:
-                continue
+                    ep_char_cast['%i_%i'%(epi.id,char.id)].voice_actor_id = va.id
 
-            char_to_va.update([(c, (voice_actor['name'], 'https://www.themoviedb.org/person/%s'%(voice_actor['id']))) for c in chars])
-        
-        # Filter characters that are present in both API's
+        episodes[ep_id] = epi
+        sleep(0.25)
+    
+    db.add_all(voice_actors.values())
+    db.add_all(characters.values())
+    db.add_all(episodes.values())
+    db.add_all(ep_char_cast.values())
 
-        c_names:list[str] = [c['name'] for c in characters_list]
-        va_to_char:dict[str, tuple[str, list[str]]] = {}
-        for c, va in char_to_va.items():
-            if c not in c_names:
-                continue
-            if va[0] not in va_to_char:
-                va_to_char[va[0]] = (va[1], [])
-            
-            va_to_char[va[0]][1].append(c)
-        
-        
-        va_cache: dict[str, Voice_Actor] = {}
-        unique_actors = {actor_name:actor_url for actor_name, actor_url, _ in va_to_char.values()}
+    db.commit()
 
-        for name, url in unique_actors.items():
-            va = Voice_Actor(name=name, url=url, characters=[])
-            db.add(va)
-            # Commit e refresh para obter o ID do ator
-            db.commit()
-            db.refresh(va)
-            va_cache[name] = va
-
-        # 3.2. Inserir Episodes (Todos os episódios da R&M API)
-        episode_cache: dict[int, Episode] = {}
-        for ep_data in episodes_list:
-            # Note: tmdb_rating e tmdb_overview estão nulos por agora.
-            ep = Episode(
-                id=ep_data['id'],
-                name=ep_data['name'],
-                air_date=ep_data['air_date'],
-                episode_code=ep_data['episode'],
-            )
-            db.add(ep)
-            episode_cache[ep.id] = ep
-        
-        # Commit para salvar todos os Episódios (importante antes de relacionar)
-        db.commit()
-        
-        print("3. Inserindo Personagens e relações...")
-
-        # 3.3. Inserir Characters e estabelecer as relações
-        for char_data in characters_list:
-            #char_name_clean = clean_name(char_data['name'])
-            char_id = char_data['id']
-            
-            # Cria o objeto Character
-            new_char = Character(
-                id=char_id,
-                name=char_data['name'],
-                status=char_data['status'],
-                species=char_data['species'],
-                s_type=char_data['type'],
-                gender=char_data['gender'],
-                origin=char_data['origin']['name'],
-                location=char_data['location']['name'],
-                image=char_data['image'],
-            )
-
-            # Relação 1: N (Personagem -> Voice_Actor)
-            # Se o personagem tiver um ator mapeado (filtrado na etapa 2), associa
-            if char_name_clean in final_char_map:
-                actor_name, _, _ = final_char_map[char_name_clean]
-                # Atribui a FK usando o ID do ator já inserido no cache
-                new_char.actor_id = va_cache[actor_name].id 
-
-            # Relação N: M (Personagem -> Episode)
-            # Conecta o personagem a todos os episódios que ele aparece
-            if char_id in char_episodes_map:
-                for ep_id in char_episodes_map[char_id]:
-                    if ep_id in episode_cache:
-                        new_char.episodes.append(episode_cache[ep_id])
-
-            db.add(new_char)
-
-        # 3.4. Commit final para salvar todos os Personagens e associações N:M
-        db.commit()
-        
-        print("✅ Banco de dados populado com sucesso!")
-        
-    except IntegrityError:
-        db.rollback()
-        print("⚠️ Erro de Integridade: Parece que você tentou rodar o script novamente sem apagar o DB. Rollback realizado.")
-    except Exception as e:
-        db.rollback()
-        print(f"❌ Ocorreu um erro catastrófico: {e}. Rollback realizado.")
-    finally:
-        db.close()
-
-if __name__ == '__main__':
-    populate_database()

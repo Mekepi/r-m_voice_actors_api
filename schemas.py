@@ -1,70 +1,74 @@
-from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional
+import database
 
 # ------------------ Base Schemas (Dados Brutos) ------------------
+class myEpisode():
+    id:int
+    episode_code:str
+    name:str
+    air_date:str
+    url:str
 
-class VoiceActorBase(BaseModel):
-    id: int
-    name: str
-    original_name: Optional[str] = None
-    gender: Optional[int] = None
+    cast:list[tuple['myCharacter', 'myVoiceActor']]
 
-class CharacterBase(BaseModel):
-    id: int
-    name: str
-    species: str
-    status: Optional[str] = None
-    gender: Optional[str] = None
+    def __init__(self, ep:database.Episode, cast:list[tuple['myCharacter', 'myVoiceActor']] = []):
+        self.id = ep.id
+        self.episode_code = ep.episode_code
+        self.name = ep.name
+        self.air_date = ep.air_date
+        self.url = ep.url
 
-class EpisodeBase(BaseModel):
-    id: int
-    episode_code: str
-    name: str
-    air_date: str
+        if cast:
+            self.cast = cast
 
-# ------------------ Objeto de Associação (Role) ------------------
+class myCharacter():
+    id:int
+    name:str
+    status:str
+    species:str
+    s_type:str
+    gender:str
+    origin:str
+    location:str
+    image:str
+    url:str
 
-class Role(BaseModel):
-    # Usado para exibir a relação completa de atuação
-    episode_id: int
-    character_id: int
-    
-    # Adicionando a classe 'Config' para que o Pydantic saiba lidar
-    # com os objetos ORM (SQLAlchemy)
-    class Config:
-        from_attributes = True # FastAPI 0.100.0+ usa from_attributes = True
+    played_by:Optional[list['myVoiceActor']]
+    episodes_in:Optional[list[tuple[myEpisode, 'myCharacter']]]
 
-# ------------------ Schemas de Resposta (Relacionamentos) ------------------
+    def __init__(self, char:database.Character):
+        self.id = char.id
+        self.name = char.name
+        self.status = char.status
+        self.species = char.species
+        self.s_type = char.s_type
+        self.gender = char.gender
+        self.origin = char.origin
+        self.location = char.location
+        self.image = char.image
+        self.url = char.url
 
-# 1. Schema para o Voice Actor (inclui os papéis detalhados)
-class VoiceActor(VoiceActorBase):
-    # A lista de papéis (EpisodeCharacterCast) feitos por este ator
-    episode_roles: List['RoleDetail'] = [] 
-    
-    class Config:
-        from_attributes = True
+class myVoiceActor():
+    id:int
+    name:str
+    original_name:str
+    gender:str
+    adult:str
 
-# 2. Schema para o Personagem (inclui apenas dados simples, para evitar loops circulares)
-class Character(CharacterBase):
-    # Não incluir a lista de roles aqui para não criar um loop de referência
-    pass
+    characters:list[myCharacter]
+    episodes:list[myEpisode]
+    episodes_role:list[tuple[myEpisode, myCharacter]]
 
-# 3. Schema para o Episódio (inclui o elenco que atuou nele)
-class Episode(EpisodeBase):
-    character_roles: List['RoleDetail'] = []
-    
-    class Config:
-        from_attributes = True
+    def __init__(self, va:database.Voice_Actor, chars:list[myCharacter] = [], episodes:list[myEpisode] = [], episodes_role:list[tuple[myEpisode, myCharacter]] = []):
+        self.id = va.id
+        self.name = va.name
+        self.original_name = va.original_name
+        self.gender = va.gender
+        self.adult = va.adult
 
-# 4. Detalhe do Papel (RoleDetail) - Onde a mágica acontece
-class RoleDetail(Role):
-    # O Pydantic carregará o objeto completo através da relação ORM
-    episode: EpisodeBase 
-    character: CharacterBase
-    voice_actor: Optional[VoiceActorBase] = None
-    
-    class Config:
-        from_attributes = True
-
-# Atualiza referências circulares
-VoiceActor.model_rebuild()
+        if chars:
+            self.characters = chars
+        if episodes:
+            self.episodes_in = episodes
+        if episodes_role:
+            self.episodes_role = episodes_role

@@ -102,10 +102,12 @@ class EpisodeCharacterCast(Base):
 
         self.episode = ep
         self.character = char
-    
-Base.metadata.create_all(bind=engine)
+
 
 def collect(db:Session=session(), my_key:str=my_key) -> None:
+    Base.metadata.drop_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
+
     voice_actors:dict[int, Voice_Actor] = {}
     characters:dict[int, Character] = {}
     episodes:dict[int, Episode] = {}
@@ -185,4 +187,3 @@ def collect(db:Session=session(), my_key:str=my_key) -> None:
     db.add_all(ep_char_cast.values())
 
     db.commit()
-
